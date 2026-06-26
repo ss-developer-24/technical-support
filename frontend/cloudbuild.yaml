@@ -1,0 +1,84 @@
+# Cloud Build configuration for Technical Support Frontend (Streamlit UI)
+#
+# This file builds the Docker image, pushes to Artifact Registry, and deploys to Cloud Run.
+# Uses $BUILD_ID for image tagging, which is automatically available
+# in both manual builds (gcloud builds submit) and automated triggers.
+#
+# Prerequisites (first-time setup):
+# 1. Grant Cloud Build permissions:
+#    PROJECT_NUM=$(gcloud projects describe $(gcloud config get-value project) --format='value(projectNumber)')
+#    gcloud projects add-iam-policy-binding $(gcloud config get-value project) \
+#      --member=serviceAccount:${PROJECT_NUM}@cloudbuild.gserviceaccount.com \
+#      --role=roles/storage.admin
+#    gcloud projects add-iam-policy-binding $(gcloud config get-value project) \
+#      --member=serviceAccount:${PROJECT_NUM}@cloudbuild.gserviceaccount.com \
+#      --role=roles/artifactregistry.writer
+#    gcloud projects add-iam-policy-binding $(gcloud config get-value project) \
+#      --member=serviceAccount:${PROJECT_NUM}@cloudbuild.gserviceaccount.com \
+#      --role=roles/run.admin
+#    gcloud iam service-accounts add-iam-policy-binding \
+#      ${PROJECT_NUM}-compute@developer.gserviceaccount.com \
+#      --member="serviceAccount:${PROJECT_NUM}@cloudbuild.gserviceaccount.com" \
+#      --role="roles/iam.serviceAccountUser"
+#
+# Deploy:
+#   cd frontend
+#   gcloud builds submit --config cloudbuild.yaml
+
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: 
+      - 'build'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/docker-repo/technical-support-frontend:$BUILD_ID'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/docker-repo/technical-support-frontend:latest'
+      - '.'
+    timeout: 600s
+
+  # Push the container image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: 
+      - 'push'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/docker-repo/technical-support-frontend:$BUILD_ID'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: 
+      - 'push'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/docker-repo/technical-support-frontend:latest'
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'technical-support-frontend'
+      - '--image'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/docker-repo/technical-support-frontend:$BUILD_ID'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--memory'
+      - '512Mi'
+      - '--cpu'
+      - '1'
+      - '--timeout'
+      - '300'
+      - '--max-instances'
+      - '10'
+      - '--set-env-vars'
+      - 'API_HOST=https://technical-support-backend-255507724672.us-central1.run.app'
+
+images:
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/docker-repo/technical-support-frontend:$BUILD_ID'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/docker-repo/technical-support-frontend:latest'
+
+options:
+  machineType: 'N1_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 1200s

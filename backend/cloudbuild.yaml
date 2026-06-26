@@ -1,0 +1,57 @@
+# Cloud Build configuration for Technical Support Backend
+#
+# This file uses Artifact Registry (not gcr.io) for storing Docker images.
+# Uses $BUILD_ID for image tagging, which is automatically available
+# in both manual builds (gcloud builds submit) and automated triggers.
+#
+# Prerequisites (first-time setup):
+# 1. Grant Cloud Build permissions:
+#    PROJECT_NUM=$(gcloud projects describe $(gcloud config get-value project) --format='value(projectNumber)')
+#    gcloud projects add-iam-policy-binding $(gcloud config get-value project) \
+#      --member=serviceAccount:${PROJECT_NUM}@cloudbuild.gserviceaccount.com \
+#      --role=roles/storage.admin
+#    gcloud projects add-iam-policy-binding $(gcloud config get-value project) \
+#      --member=serviceAccount:${PROJECT_NUM}@cloudbuild.gserviceaccount.com \
+#      --role=roles/artifactregistry.writer
+#
+# 2. Store secrets in Secret Manager:
+#    echo -n "YOUR_KEY" | gcloud secrets create google-api-key --data-file=-
+#    echo -n "YOUR_KEY" | gcloud secrets create tavily-api-key --data-file=-
+#    echo -n "YOUR_BUCKET" | gcloud secrets create gcs-bucket-name --data-file=-
+#
+# Deploy:
+#   cd backend
+#   gcloud builds submit --config cloudbuild.yaml
+
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: 
+      - 'build'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/docker-repo/technical-support-backend:$BUILD_ID'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/docker-repo/technical-support-backend:latest'
+      - '.'
+    timeout: 600s
+
+  # Push the container image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/docker-repo/technical-support-backend:$BUILD_ID'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/docker-repo/technical-support-backend:latest'
+
+images:
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/docker-repo/technical-support-backend:$BUILD_ID'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/docker-repo/technical-support-backend:latest'
+
+options:
+  machineType: 'N1_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY
+  
+timeout: 1200s
