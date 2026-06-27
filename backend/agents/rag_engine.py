@@ -9,7 +9,7 @@ from google.cloud import storage
 from google.cloud import aiplatform
 from vertexai.language_models import TextEmbeddingModel
 import numpy as np
-from PyPDF2 import PdfReader
+import pdfplumber
 import io
 import pickle
 import tempfile
@@ -34,8 +34,8 @@ class RAGEngine:
         # Initialize Vertex AI
         aiplatform.init(project=self.project_id, location=self.location)
         
-        # Initialize embedding model
-        self.embedding_model = TextEmbeddingModel.from_pretrained("textembedding-gecko@003")
+        # Initialize embedding model (using text-embedding-004)
+        self.embedding_model = TextEmbeddingModel.from_pretrained("text-embedding-004")
         
         # Storage client
         self.storage_client = storage.Client(project=self.project_id)
@@ -85,8 +85,12 @@ class RAGEngine:
         try:
             logger.info(f"Starting document ingestion from gs://{self.bucket_name}")
             
-            # List all PDF files in bucket
-            blobs = list(self.bucket.list_blobs())
+            # List all PDF files in bucket (run in thread pool)
+            loop = asyncio.get_event_loop()
+            blobs = await loop.run_in_executor(
+                None,
+                lambda: list(self.bucket.list_blobs())
+            )
             pdf_blobs = [b for b in blobs if b.name.lower().endswith('.pdf')]
             
             logger.info(f"Found {len(pdf_blobs)} PDF files")
@@ -96,13 +100,16 @@ class RAGEngine:
             
             # Process each PDF
             new_documents = []
-            for blob in pdf_blobs:
+            for idx, blob in enumerate(pdf_blobs):
                 try:
-                    logger.info(f"Processing: {blob.name}")
+                    logger.info(f"Processing {idx+1}/{len(pdf_blobs)}: {blob.name}")
+                    logger.info(f"About to call _process_pdf_blob for: {blob.name}")
                     docs = await self._process_pdf_blob(blob)
+                    logger.info(f"_process_pdf_blob returned {len(docs)} docs for: {blob.name}")
                     new_documents.extend(docs)
+                    logger.info(f"Successfully processed {blob.name}, total docs so far: {len(new_documents)}")
                 except Exception as e:
-                    logger.error(f"Error processing {blob.name}: {str(e)}")
+                    logger.error(f"Error processing {blob.name}: {str(e)}", exc_info=True)
             
             if not new_documents:
                 return {"count": 0, "message": "No content extracted from PDFs"}
@@ -140,40 +147,85 @@ class RAGEngine:
             List of document chunks with metadata
         """
         try:
-            # Download PDF to memory
-            pdf_bytes = blob.download_as_bytes()
-            pdf_file = io.BytesIO(pdf_bytes)
+            logger.info(f"ENTERED _process_pdf_blob for: {blob.name}")
             
-            # Extract text
-            reader = PdfReader(pdf_file)
-            full_text = ""
+            # Run the entire PDF processing in a thread executor to avoid blocking
+            loop = asyncio.get_event_loop()
+            documents = await loop.run_in_executor(
+                None,
+                self._extract_pdf_sync,
+                blob
+            )
             
-            for page_num, page in enumerate(reader.pages):
-                text = page.extract_text()
-                full_text += f"\n\n--- Page {page_num + 1} ---\n\n{text}"
-            
-            # Chunk text (simple chunking by size)
-            chunks = self._chunk_text(full_text, chunk_size=1000, overlap=200)
-            
-            # Create document objects
-            documents = []
-            for i, chunk in enumerate(chunks):
-                documents.append({
-                    "content": chunk,
-                    "metadata": {
-                        "source": blob.name,
-                        "chunk_id": i,
-                        "total_chunks": len(chunks),
-                        "type": "pdf"
-                    },
-                    "title": f"{blob.name} (chunk {i+1}/{len(chunks)})"
-                })
-            
+            logger.info(f"Successfully extracted {len(documents)} chunks from {blob.name}")
             return documents
             
         except Exception as e:
             logger.error(f"Error processing PDF {blob.name}: {str(e)}")
             return []
+    
+    def _extract_pdf_sync(self, blob: storage.Blob) -> List[Dict[str, Any]]:
+        """
+        Synchronous PDF extraction (runs in thread pool)
+        """
+        logger.info(f"Downloading PDF: {blob.name}")
+        pdf_bytes = blob.download_as_bytes()
+        logger.info(f"Downloaded {len(pdf_bytes)} bytes for: {blob.name}")
+        
+        pdf_file = io.BytesIO(pdf_bytes)
+        
+        logger.info(f"Extracting text from PDF: {blob.name}")
+        # Extract text and tables with pdfplumber
+        full_text = ""
+        
+        with pdfplumber.open(pdf_file) as pdf:
+            logger.info(f"Opened PDF, found {len(pdf.pages)} pages in: {blob.name}")
+            
+            for page_num, page in enumerate(pdf.pages):
+                logger.info(f"Extracting page {page_num + 1}/{len(pdf.pages)} from: {blob.name}")
+                
+                # Extract text
+                text = page.extract_text() or ""
+                page_content = f"\n\n--- Page {page_num + 1} ---\n\n{text}"
+                
+                # Extract tables and format them
+                tables = page.extract_tables()
+                if tables:
+                    logger.info(f"Found {len(tables)} tables on page {page_num + 1}")
+                    for table_num, table in enumerate(tables):
+                        page_content += f"\n\n[Table {table_num + 1}]\n"
+                        # Format table as text with pipes for better structure
+                        for row in table:
+                            if row:  # Skip empty rows
+                                page_content += " | ".join(str(cell or "") for cell in row) + "\n"
+                
+                full_text += page_content
+                logger.info(f"Extracted {len(text)} chars from page {page_num + 1}")
+        
+        logger.info(f"Chunking text for: {blob.name} ({len(full_text)} chars)")
+        # Chunk text (simple chunking by size)
+        logger.info(f"About to call _chunk_text...")
+        chunks = self._chunk_text(full_text, chunk_size=1000, overlap=200)
+        logger.info(f"_chunk_text returned, processing {len(chunks)} chunks")
+        
+        logger.info(f"Created {len(chunks)} chunks from {blob.name}")
+        logger.info(f"Building document objects...")
+        # Create document objects
+        documents = []
+        for i, chunk in enumerate(chunks):
+            documents.append({
+                "content": chunk,
+                "metadata": {
+                    "source": blob.name,
+                    "chunk_id": i,
+                    "total_chunks": len(chunks),
+                    "type": "pdf"
+                },
+                "title": f"{blob.name} (chunk {i+1}/{len(chunks)})"
+            })
+        
+        logger.info(f"Returning {len(documents)} documents from _extract_pdf_sync")
+        return documents
     
     def _chunk_text(
         self,
@@ -190,8 +242,11 @@ class RAGEngine:
         chunks = []
         start = 0
         text_length = len(text)
+        max_iterations = (text_length // (chunk_size - overlap)) + 2  # Safety limit
+        iterations = 0
         
-        while start < text_length:
+        while start < text_length and iterations < max_iterations:
+            iterations += 1
             end = start + chunk_size
             
             # Try to break at sentence boundary
@@ -209,7 +264,14 @@ class RAGEngine:
             if chunk:
                 chunks.append(chunk)
             
-            start = end - overlap
+            # Ensure we're making progress
+            next_start = end - overlap
+            if next_start <= start:
+                next_start = start + 1  # Force progress to avoid infinite loop
+            start = next_start
+        
+        logger.info(f"_chunk_text completed: created {len(chunks)} chunks in {iterations} iterations")
+        return chunks
         
         return chunks
     
@@ -224,23 +286,30 @@ class RAGEngine:
             
             for i in range(0, len(texts), batch_size):
                 batch = texts[i:i + batch_size]
+                logger.info(f"Generating embeddings for batch {i//batch_size + 1} ({len(batch)} texts)...")
                 
                 # Run in thread pool (Vertex AI client is synchronous)
                 loop = asyncio.get_event_loop()
                 embeddings = await loop.run_in_executor(
                     None,
-                    lambda: self.embedding_model.get_embeddings(batch)
+                    self._get_embeddings_sync,
+                    batch
                 )
                 
                 # Extract vectors
                 for emb in embeddings:
                     all_embeddings.append(np.array(emb.values))
             
+            logger.info(f"Generated {len(all_embeddings)} embeddings")
             return all_embeddings
             
         except Exception as e:
             logger.error(f"Error generating embeddings: {str(e)}")
             raise
+    
+    def _get_embeddings_sync(self, texts: List[str]):
+        """Synchronous wrapper for getting embeddings"""
+        return self.embedding_model.get_embeddings(texts)
     
     async def search(
         self,

@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional
 from google import genai
 from google.genai import types
 import os
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -115,16 +116,20 @@ Questions that don't need research:
 - Basic troubleshooting approaches
 """
             
-            response = self.client.models.generate_content(
-                model=self.model_id,
-                contents=analysis_prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.1,
-                    response_mime_type="application/json"
+            import json
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.client.models.generate_content(
+                    model=self.model_id,
+                    contents=analysis_prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.1,
+                        response_mime_type="application/json"
+                    )
                 )
             )
             
-            import json
             analysis = json.loads(response.text)
             return analysis.get("needs_research", True)
             
@@ -164,12 +169,16 @@ Question: {question}
 Provide a clear, accurate, and helpful answer based on your general knowledge.
 """
             
-            response = self.client.models.generate_content(
-                model=self.model_id,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.7,
-                    max_output_tokens=1024
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.client.models.generate_content(
+                    model=self.model_id,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.7,
+                        max_output_tokens=1024
+                    )
                 )
             )
             

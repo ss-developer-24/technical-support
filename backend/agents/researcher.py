@@ -40,7 +40,7 @@ class ResearcherAgent:
     
     async def research(self, question: str) -> Dict[str, Any]:
         """
-        Perform research on a question using RAG and web search
+        Perform research on a question using RAG first, then web search if RAG fails
         
         Args:
             question: The question to research
@@ -51,30 +51,19 @@ class ResearcherAgent:
         try:
             logger.info(f"Researching: {question[:100]}...")
             
-            # Run RAG and web search in parallel if both are available
-            tasks = []
-            
-            if self.rag_engine:
-                tasks.append(self._rag_search(question))
-            
-            if self.tavily_client:
-                tasks.append(self._web_search(question))
-            
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            # Combine results
             rag_results = []
             web_results = []
             
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    logger.warning(f"Task {i} failed: {str(result)}")
-                    continue
-                    
-                if i == 0 and self.rag_engine:  # RAG results
-                    rag_results = result
-                elif self.tavily_client:  # Web results
-                    web_results = result
+            # Try RAG first
+            if self.rag_engine:
+                rag_results = await self._rag_search(question)
+                
+            # Only perform web search if RAG returned no results or insufficient results
+            if not rag_results and self.tavily_client:
+                logger.info("RAG returned no results, falling back to web search...")
+                web_results = await self._web_search(question)
+            elif rag_results:
+                logger.info(f"RAG found {len(rag_results)} results, skipping web search")
             
             # Synthesize research findings
             synthesized = await self._synthesize_research(
@@ -156,9 +145,13 @@ class ResearcherAgent:
                 context_parts.append("=== Internal Documentation ===")
                 for i, result in enumerate(rag_results[:3], 1):
                     context_parts.append(f"\n[RAG-{i}] {result.get('content', '')}")
+                    metadata = result.get("metadata", {})
                     all_sources.append({
-                        "type": "document",
+                        "type": "rag",
                         "title": result.get("title", f"Document {i}"),
+                        "source": metadata.get("source", "Unknown Document"),
+                        "document": metadata.get("source", "Unknown"),
+                        "chunk_id": metadata.get("chunk_id", 0),
                         "content": result.get("content", "")[:200] + "...",
                         "score": result.get("score", 0)
                     })
@@ -202,12 +195,16 @@ Provide a clear and concise summary that:
 3. Notes any contradictions or gaps
 """
             
-            response = self.client.models.generate_content(
-                model=self.model_id,
-                contents=summary_prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.3,
-                    max_output_tokens=512
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.client.models.generate_content(
+                    model=self.model_id,
+                    contents=summary_prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.3,
+                        max_output_tokens=512
+                    )
                 )
             )
             

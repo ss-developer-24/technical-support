@@ -7,6 +7,7 @@ from google import genai
 from google.genai import types
 import os
 import json
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +51,13 @@ class ReviewerAgent:
             # Perform quality assessment
             assessment = await self._assess_quality(question, answer, sources)
             
+            # Check if answer has RAG sources (internal documentation)
+            has_rag_sources = any(s.get("type") == "rag" for s in (sources or []))
+            
             # If quality is low, attempt to improve
-            if assessment["quality_score"] < 0.7:
+            # Lower threshold to 0.5 to reduce unnecessary improvements for RAG answers
+            # Skip improvement if RAG sources are present (already well-sourced)
+            if assessment["quality_score"] < 0.5 and not has_rag_sources:
                 logger.info(f"Quality score {assessment['quality_score']} below threshold, improving answer...")
                 improved_answer = await self._improve_answer(
                     question=question,
@@ -72,7 +78,9 @@ class ReviewerAgent:
                     "review_notes": final_assessment.get("strengths", [])
                 }
             else:
-                # Answer is good enough
+                # Answer is good enough or has RAG sources
+                if has_rag_sources:
+                    logger.info(f"Skipping improvement for RAG-sourced answer (score: {assessment['quality_score']})")
                 return {
                     "answer": answer,
                     "sources": sources or [],
@@ -134,12 +142,16 @@ Respond with JSON in this format:
 }}
 """
             
-            response = self.client.models.generate_content(
-                model=self.model_id,
-                contents=assessment_prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.1,
-                    response_mime_type="application/json"
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.client.models.generate_content(
+                    model=self.model_id,
+                    contents=assessment_prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.1,
+                        response_mime_type="application/json"
+                    )
                 )
             )
             
@@ -198,12 +210,16 @@ Provide an improved answer that:
 Write only the improved answer, without meta-commentary.
 """
             
-            response = self.client.models.generate_content(
-                model=self.model_id,
-                contents=improvement_prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.5,
-                    max_output_tokens=1024
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.client.models.generate_content(
+                    model=self.model_id,
+                    contents=improvement_prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.5,
+                        max_output_tokens=1024
+                    )
                 )
             )
             

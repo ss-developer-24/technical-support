@@ -7,6 +7,12 @@ from pydantic import BaseModel
 import os
 import logging
 from typing import Optional
+from dotenv import load_dotenv
+import asyncio
+import threading
+
+# Load environment variables from .env file
+load_dotenv()
 
 from agents.orchestrator import OrchestratorAgent
 from agents.researcher import ResearcherAgent
@@ -143,23 +149,43 @@ async def get_status():
 async def ingest_documents():
     """
     Trigger document ingestion from GCS bucket to create embeddings
+    Runs in a separate thread to avoid blocking and survive request completion
     """
     try:
         initialize_agents()
         
         if researcher_agent:
-            result = await researcher_agent.ingest_documents()
+            # Run in a separate daemon thread that survives the request
+            thread = threading.Thread(target=run_ingestion_in_thread, daemon=True)
+            thread.start()
             return {
-                "status": "success",
-                "documents_processed": result.get("count", 0),
-                "message": "Documents ingested successfully"
+                "status": "started",
+                "message": "Document ingestion started in background. Check logs for progress."
             }
         else:
             raise HTTPException(status_code=503, detail="Researcher agent not available")
             
     except Exception as e:
-        logger.error(f"Error ingesting documents: {str(e)}")
+        logger.error(f"Error starting document ingestion: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+def run_ingestion_in_thread():
+    """Thread function to run document ingestion with its own event loop"""
+    try:
+        logger.info("Background ingestion thread started")
+        # Create a new event loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Run the ingestion
+        result = loop.run_until_complete(researcher_agent.ingest_documents())
+        logger.info(f"Background ingestion completed: {result}")
+        
+        loop.close()
+    except Exception as e:
+        logger.error(f"Background ingestion failed: {str(e)}", exc_info=True)
+    except Exception as e:
+        logger.error(f"Background ingestion failed: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
