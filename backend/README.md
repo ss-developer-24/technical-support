@@ -98,8 +98,8 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
 ### Option 1: Using the Deploy Script
 ```bash
 cd backend
-chmod +x deploy.sh
-./deploy.sh
+chmod +x deployment/deploy.sh
+./deployment/deploy.sh
 ```
 
 ### Option 2: Using Cloud Build
@@ -124,14 +124,14 @@ gcloud projects add-iam-policy-binding $(gcloud config get-value project) \
 ```bash
 # Submit build from backend directory
 cd backend
-gcloud builds submit --config cloudbuild.yaml
+gcloud builds submit --config deployment/cloudbuild.yaml .
 ```
 
 ### Option 3: Manual Deployment
 ```bash
-# Build the image
+# Build the image (Dockerfile is in deployment/ subdirectory)
 cd backend
-docker build -t gcr.io/YOUR_PROJECT_ID/technical-support-backend .
+docker build -f deployment/Dockerfile -t gcr.io/YOUR_PROJECT_ID/technical-support-backend .
 
 # Push to GCR
 docker push gcr.io/YOUR_PROJECT_ID/technical-support-backend

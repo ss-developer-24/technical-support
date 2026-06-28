@@ -24,7 +24,7 @@ class ReviewerAgent:
             raise ValueError("GOOGLE_API_KEY environment variable is required")
         
         self.client = genai.Client(api_key=api_key)
-        self.model_id = os.getenv("REVIEWER_MODEL", "gemini-pro")
+        self.model_id = os.getenv("REVIEWER_MODEL", "gemini-2.5-flash-lite")
         
         logger.info(f"Reviewer initialized with model: {self.model_id}")
     

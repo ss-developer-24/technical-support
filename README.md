@@ -68,8 +68,8 @@ Frontend runs at `http://localhost:8501`
 ```bash
 cd backend
 
-# Build
-docker build -t technical-support-backend .
+# Build (Dockerfile is in deployment/ subdirectory)
+docker build -f deployment/Dockerfile -t technical-support-backend .
 
 # Run with environment variables
 docker run -p 8000:8000 \
@@ -109,7 +109,14 @@ Access at `http://localhost:8080`
 
 ```bash
 cd backend
-./deploy.sh
+# Run deploy script from deployment subdirectory
+./deployment/deploy.sh
+```
+
+Or use Cloud Build directly:
+```bash
+cd backend
+gcloud builds submit --config deployment/cloudbuild.yaml .
 ```
 
 See [backend/README.md](backend/README.md) for detailed deployment instructions.
@@ -139,13 +146,15 @@ technical-support/
 │   ├── agents/                # Agent implementations
 │   │   ├── orchestrator.py   # Orchestrator agent
 │   │   ├── researcher.py     # Researcher with Tavily & RAG
-│   │   ├── reviewer.py       # Response quality reviewer
+│   │   └── reviewer.py       # Response quality reviewer
+│   ├── rag/                   # RAG engine module
 │   │   └── rag_engine.py     # Vertex AI RAG engine
+│   ├── deployment/            # Deployment configurations
+│   │   ├── Dockerfile        # Backend container
+│   │   ├── deploy.sh         # Backend deployment script
+│   │   └── cloudbuild.yaml   # Backend Cloud Build config
 │   ├── main.py               # FastAPI application
 │   ├── requirements.txt      # Backend dependencies
-│   ├── Dockerfile            # Backend container
-│   ├── deploy.sh             # Backend deployment script
-│   ├── cloudbuild.yaml       # Backend Cloud Build config
 │   └── README.md             # Backend documentation
 ├── frontend/                  # Streamlit frontend
 │   ├── app.py                # Main Streamlit application

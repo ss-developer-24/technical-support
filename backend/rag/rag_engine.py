@@ -1,5 +1,5 @@
 """
-RAG Engine for document embeddings and retrieval using Vertex AI
+RAG Engine for document embeddings and retrieval using Vertex AI + ChromaDB
 """
 import logging
 import os
@@ -11,18 +11,18 @@ from vertexai.language_models import TextEmbeddingModel
 import numpy as np
 import pdfplumber
 import io
-import pickle
-import tempfile
+import chromadb
+from chromadb.config import Settings
 
 logger = logging.getLogger(__name__)
 
 class RAGEngine:
     """
-    RAG Engine using Vertex AI for embeddings and vector search
+    RAG Engine using Vertex AI for embeddings and ChromaDB for vector storage
     """
     
     def __init__(self):
-        """Initialize RAG engine with Vertex AI"""
+        """Initialize RAG engine with Vertex AI embeddings and ChromaDB storage"""
         # GCP Configuration
         self.project_id = os.getenv("GCP_PROJECT_ID")
         self.location = os.getenv("VERTEX_AI_LOCATION", "us-central1")
@@ -41,39 +41,36 @@ class RAGEngine:
         self.storage_client = storage.Client(project=self.project_id)
         self.bucket = self.storage_client.bucket(self.bucket_name)
         
-        # In-memory vector store (for production, use Vertex AI Vector Search)
-        self.embeddings_cache_file = "/tmp/embeddings_cache.pkl"
-        self.documents = []
-        self.embeddings = []
+        # Initialize ChromaDB with persistent storage
+        chroma_persist_dir = os.getenv("CHROMA_PERSIST_DIR", "/tmp/chromadb")
+        os.makedirs(chroma_persist_dir, exist_ok=True)
         
-        # Try to load cached embeddings
-        self._load_cache()
+        self.chroma_client = chromadb.PersistentClient(
+            path=chroma_persist_dir,
+            settings=Settings(
+                anonymized_telemetry=False,
+                allow_reset=True
+            )
+        )
         
-        logger.info(f"RAG Engine initialized - Project: {self.project_id}, Bucket: {self.bucket_name}")
-    
-    def _load_cache(self):
-        """Load cached embeddings from file"""
+        # Get or create collection
+        self.collection_name = "technical_support_docs"
         try:
-            if os.path.exists(self.embeddings_cache_file):
-                with open(self.embeddings_cache_file, 'rb') as f:
-                    cache = pickle.load(f)
-                    self.documents = cache.get('documents', [])
-                    self.embeddings = cache.get('embeddings', [])
-                logger.info(f"Loaded {len(self.documents)} cached documents")
-        except Exception as e:
-            logger.warning(f"Could not load cache: {str(e)}")
+            self.collection = self.chroma_client.get_collection(name=self.collection_name)
+            logger.info(f"Loaded existing ChromaDB collection with {self.collection.count()} documents")
+        except:
+            self.collection = self.chroma_client.create_collection(
+                name=self.collection_name,
+                metadata={"description": "Technical support documentation embeddings"}
+            )
+            logger.info(f"Created new ChromaDB collection: {self.collection_name}")
+        
+        logger.info(f"RAG Engine initialized - Project: {self.project_id}, Bucket: {self.bucket_name}, ChromaDB: {chroma_persist_dir}")
     
-    def _save_cache(self):
-        """Save embeddings to cache file"""
-        try:
-            with open(self.embeddings_cache_file, 'wb') as f:
-                pickle.dump({
-                    'documents': self.documents,
-                    'embeddings': self.embeddings
-                }, f)
-            logger.info("Embeddings cache saved")
-        except Exception as e:
-            logger.warning(f"Could not save cache: {str(e)}")
+    def _get_embeddings_sync(self, texts: List[str]) -> List[List[float]]:
+        """Synchronous wrapper for getting embeddings from Vertex AI"""
+        embeddings = self.embedding_model.get_embeddings(texts)
+        return [emb.values for emb in embeddings]
     
     async def ingest_from_gcs(self) -> Dict[str, Any]:
         """
@@ -116,22 +113,49 @@ class RAGEngine:
             
             # Generate embeddings for new documents
             logger.info(f"Generating embeddings for {len(new_documents)} document chunks...")
-            new_embeddings = await self._generate_embeddings(
+            embeddings = await self._generate_embeddings(
                 [doc["content"] for doc in new_documents]
             )
             
-            # Add to store
-            self.documents.extend(new_documents)
-            self.embeddings.extend(new_embeddings)
+            # Add to ChromaDB collection
+            logger.info(f"Adding {len(new_documents)} documents to ChromaDB...")
             
-            # Save cache
-            self._save_cache()
+            # Prepare data for ChromaDB
+            ids = [f"doc_{i}_{hash(doc['content'][:100])}" for i, doc in enumerate(new_documents)]
+            documents_text = [doc["content"] for doc in new_documents]
+            metadatas = [
+                {
+                    "source": doc["metadata"]["source"],
+                    "chunk_id": str(doc["metadata"]["chunk_id"]),
+                    "total_chunks": str(doc["metadata"]["total_chunks"]),
+                    "type": doc["metadata"]["type"],
+                    "title": doc["title"]
+                }
+                for doc in new_documents
+            ]
             
-            logger.info(f"Successfully ingested {len(new_documents)} document chunks")
+            # Add to ChromaDB in batches to avoid memory issues
+            batch_size = 100
+            for i in range(0, len(new_documents), batch_size):
+                batch_end = min(i + batch_size, len(new_documents))
+                logger.info(f"Adding batch {i//batch_size + 1} ({i}-{batch_end})...")
+                
+                await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda start=i, end=batch_end: self.collection.add(
+                        ids=ids[start:end],
+                        embeddings=embeddings[start:end],
+                        documents=documents_text[start:end],
+                        metadatas=metadatas[start:end]
+                    )
+                )
+            
+            total_count = self.collection.count()
+            logger.info(f"Successfully ingested {len(new_documents)} document chunks. Total in collection: {total_count}")
             
             return {
                 "count": len(new_documents),
-                "total_documents": len(self.documents),
+                "total_documents": total_count,
                 "pdf_files_processed": len(pdf_blobs)
             }
             
@@ -275,9 +299,12 @@ class RAGEngine:
         
         return chunks
     
-    async def _generate_embeddings(self, texts: List[str]) -> List[np.ndarray]:
+    async def _generate_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
         Generate embeddings for a list of texts using Vertex AI
+        
+        Returns:
+            List of embedding vectors as lists (compatible with ChromaDB)
         """
         try:
             # Vertex AI has batch limits, process in batches
@@ -296,9 +323,8 @@ class RAGEngine:
                     batch
                 )
                 
-                # Extract vectors
-                for emb in embeddings:
-                    all_embeddings.append(np.array(emb.values))
+                # Add embedding vectors as lists (ChromaDB compatible)
+                all_embeddings.extend(embeddings)
             
             logger.info(f"Generated {len(all_embeddings)} embeddings")
             return all_embeddings
@@ -307,17 +333,13 @@ class RAGEngine:
             logger.error(f"Error generating embeddings: {str(e)}")
             raise
     
-    def _get_embeddings_sync(self, texts: List[str]):
-        """Synchronous wrapper for getting embeddings"""
-        return self.embedding_model.get_embeddings(texts)
-    
     async def search(
         self,
         query: str,
         top_k: int = 5
     ) -> List[Dict[str, Any]]:
         """
-        Search for relevant documents using semantic similarity
+        Search for relevant documents using semantic similarity via ChromaDB
         
         Args:
             query: Search query
@@ -327,44 +349,50 @@ class RAGEngine:
             List of relevant documents with scores
         """
         try:
-            if not self.documents or not self.embeddings:
-                logger.warning("No documents in store, returning empty results")
+            collection_count = self.collection.count()
+            if collection_count == 0:
+                logger.warning("No documents in ChromaDB collection, returning empty results")
                 return []
+            
+            logger.info(f"Searching {collection_count} documents for: {query[:100]}...")
             
             # Generate query embedding
             query_embeddings = await self._generate_embeddings([query])
             query_vector = query_embeddings[0]
             
-            # Compute cosine similarity
-            similarities = []
-            for doc_vector in self.embeddings:
-                similarity = self._cosine_similarity(query_vector, doc_vector)
-                similarities.append(similarity)
+            # Query ChromaDB
+            loop = asyncio.get_event_loop()
+            results = await loop.run_in_executor(
+                None,
+                lambda: self.collection.query(
+                    query_embeddings=[query_vector],
+                    n_results=top_k,
+                    include=["documents", "metadatas", "distances"]
+                )
+            )
             
-            # Get top-k results
-            top_indices = np.argsort(similarities)[-top_k:][::-1]
+            # Format results
+            formatted_results = []
+            if results and results['ids'] and len(results['ids'][0]) > 0:
+                for i in range(len(results['ids'][0])):
+                    # ChromaDB returns distances (lower is better)
+                    # Convert to similarity score (higher is better)
+                    distance = results['distances'][0][i]
+                    # For cosine distance: similarity = 1 - distance
+                    similarity = 1 - distance
+                    
+                    # Only include results above threshold
+                    if similarity > 0.3:
+                        formatted_results.append({
+                            "content": results['documents'][0][i],
+                            "metadata": results['metadatas'][0][i],
+                            "title": results['metadatas'][0][i].get('title', 'Untitled'),
+                            "score": float(similarity)
+                        })
             
-            results = []
-            for idx in top_indices:
-                if similarities[idx] > 0.3:  # Threshold for relevance
-                    doc = self.documents[idx].copy()
-                    doc['score'] = float(similarities[idx])
-                    results.append(doc)
-            
-            logger.info(f"Search returned {len(results)} results")
-            return results
+            logger.info(f"Search returned {len(formatted_results)} results")
+            return formatted_results
             
         except Exception as e:
             logger.error(f"Error in search: {str(e)}")
             return []
-    
-    def _cosine_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
-        """Calculate cosine similarity between two vectors"""
-        dot_product = np.dot(vec1, vec2)
-        norm1 = np.linalg.norm(vec1)
-        norm2 = np.linalg.norm(vec2)
-        
-        if norm1 == 0 or norm2 == 0:
-            return 0.0
-        
-        return dot_product / (norm1 * norm2)

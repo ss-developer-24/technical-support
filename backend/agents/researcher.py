@@ -9,7 +9,7 @@ import os
 import asyncio
 from tavily import TavilyClient
 
-from .rag_engine import RAGEngine
+from rag.rag_engine import RAGEngine
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class ResearcherAgent:
             raise ValueError("GOOGLE_API_KEY environment variable is required")
         
         self.client = genai.Client(api_key=api_key)
-        self.model_id = os.getenv("RESEARCHER_MODEL", "gemini-pro")
+        self.model_id = os.getenv("RESEARCHER_MODEL", "gemini-2.5-flash-lite")
         
         # Initialize Tavily for web search
         tavily_key = os.getenv("TAVILY_API_KEY")

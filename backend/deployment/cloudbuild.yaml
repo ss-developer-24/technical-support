@@ -21,13 +21,16 @@
 #
 # Deploy:
 #   cd backend
-#   gcloud builds submit --config cloudbuild.yaml
+#   gcloud builds submit --config deployment/cloudbuild.yaml
 
 steps:
   # Build the container image
   - name: 'gcr.io/cloud-builders/docker'
     args: 
       - 'build'
+      - '--no-cache'
+      - '-f'
+      - 'deployment/Dockerfile'
       - '-t'
       - 'us-central1-docker.pkg.dev/$PROJECT_ID/docker-repo/technical-support-backend:$BUILD_ID'
       - '-t'

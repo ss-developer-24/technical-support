@@ -16,7 +16,7 @@ cd backend && python test_backend.py
 ./setup.sh
 
 # Deploy Backend
-cd backend && ./deploy.sh
+cd backend && ./deployment/deploy.sh
 
 # Deploy Frontend
 cd frontend && ./deploy.sh PROJECT_ID REGION BACKEND_URL
@@ -95,8 +95,8 @@ cd backend && python test_backend.py
 ## 🐳 Docker Commands
 
 ```bash
-# Build backend
-cd backend && docker build -t backend .
+# Build backend (Dockerfile in deployment/ subdirectory)
+cd backend && docker build -f deployment/Dockerfile -t backend .
 
 # Run backend
 cd backend && docker run -p 8000:8000 --env-file .env backend

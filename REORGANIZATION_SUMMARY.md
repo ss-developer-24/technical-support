@@ -13,10 +13,15 @@ technical-support/
 │   │   ├── orchestrator.py  # Orchestrator agent
 │   │   ├── researcher.py    # Researcher with Tavily & RAG
 │   │   ├── reviewer.py      # Reviewer agent
-│   │   └── rag_engine.py    # Vertex AI RAG engine
+│   │   └── __init__.py
+│   ├── rag/                  # RAG engine module
+│   │   ├── rag_engine.py    # Vertex AI RAG engine
+│   │   └── __init__.py
+│   ├── deployment/           # Deployment configurations
+│   │   ├── Dockerfile       # Backend container
+│   │   ├── deploy.sh        # Backend deployment script
+│   │   └── cloudbuild.yaml  # Backend Cloud Build config
 │   ├── main.py              # FastAPI application
-│   ├── Dockerfile           # Backend container
-│   ├── deploy.sh            # Backend deployment script
 │   └── ...
 │
 ├── frontend/                 # Frontend Streamlit application
@@ -90,7 +95,7 @@ streamlit run app.py
 **Backend:**
 ```bash
 cd backend
-docker build -t technical-support-backend .
+docker build -f deployment/Dockerfile -t technical-support-backend .
 ```
 
 **Frontend:**

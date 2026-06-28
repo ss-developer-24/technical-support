@@ -36,9 +36,31 @@ echo "    --member=serviceAccount:${PROJECT_NUM}@cloudbuild.gserviceaccount.com 
 echo "    --role=roles/artifactregistry.writer"
 echo ""
 
-# Build and push to Google Container Registry
-echo "Building container image..."
-gcloud builds submit --tag gcr.io/$PROJECT_ID/$SERVICE_NAME .
+# Navigate to backend root directory if in deployment subdirectory
+if [ -f "deployment/Dockerfile" ]; then
+    echo "Running from backend root directory"
+    DOCKERFILE_PATH="deployment/Dockerfile"
+elif [ -f "Dockerfile" ]; then
+    echo "Running from deployment subdirectory, moving to parent"
+    cd ..
+    if [ ! -f "deployment/Dockerfile" ]; then
+        echo "Error: Cannot find backend root directory"
+        exit 1
+    fi
+    DOCKERFILE_PATH="deployment/Dockerfile"
+else
+    echo "Error: Cannot find Dockerfile"
+    exit 1
+fi
+
+# Build and push to Google Container Registry using Cloud Build with cloudbuild.yaml
+echo "Building container image with Cloud Build..."
+if [ -f "deployment/cloudbuild.yaml" ]; then
+    gcloud builds submit --config deployment/cloudbuild.yaml .
+else
+    echo "Warning: cloudbuild.yaml not found, using direct docker build"
+    gcloud builds submit --tag gcr.io/$PROJECT_ID/$SERVICE_NAME -f $DOCKERFILE_PATH .
+fi
 
 # Deploy to Cloud Run
 echo "Deploying to Cloud Run..."
