@@ -10,6 +10,7 @@ import asyncio
 from tavily import TavilyClient
 
 from rag.rag_engine import RAGEngine
+from utils.tracing import trace_agent
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ class ResearcherAgent:
         
         logger.info(f"Researcher initialized - Model: {self.model_id}, RAG: {self.enable_rag}, Tavily: {self.tavily_client is not None}")
     
+    @trace_agent(agent_name="researcher", run_type="chain")
     async def research(self, question: str) -> Dict[str, Any]:
         """
         Perform research on a question using RAG first, then web search if RAG fails
@@ -78,6 +80,7 @@ class ResearcherAgent:
             logger.error(f"Error in research: {str(e)}")
             raise
     
+    @trace_agent(agent_name="researcher", run_type="retriever")
     async def _rag_search(self, query: str) -> List[Dict[str, Any]]:
         """
         Search using RAG engine (Vertex AI embeddings)
@@ -91,6 +94,7 @@ class ResearcherAgent:
             logger.error(f"RAG search error: {str(e)}")
             return []
     
+    @trace_agent(agent_name="researcher", run_type="tool")
     async def _web_search(self, query: str) -> List[Dict[str, Any]]:
         """
         Search the web using Tavily

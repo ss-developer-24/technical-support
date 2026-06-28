@@ -243,18 +243,44 @@ The server will start at http://localhost:8000
 | `GOOGLE_API_KEY` | Yes | Google AI API key for Gemini |
 | `TAVILY_API_KEY` | Yes | Tavily API key for web search |
 | `VERTEX_AI_LOCATION` | No | Vertex AI region (default: us-central1) |
-| `ORCHESTRATOR_MODEL` | No | Model for orchestrator (default: gemini-2.0-flash-exp) |
-| `RESEARCHER_MODEL` | No | Model for researcher (default: gemini-2.0-flash-exp) |
-| `REVIEWER_MODEL` | No | Model for reviewer (default: gemini-2.0-flash-exp) |
+| `ORCHESTRATOR_MODEL` | No | Model for orchestrator (default: gemini-2.5-flash-lite) |
+| `RESEARCHER_MODEL` | No | Model for researcher (default: gemini-2.5-flash-lite) |
+| `REVIEWER_MODEL` | No | Model for reviewer (default: gemini-2.5-flash-lite) |
 | `ENABLE_RAG` | No | Enable RAG retrieval (default: true) |
 | `PORT` | No | Server port (default: 8000) |
+| `LANGSMITH_TRACING` | No | Enable LangSmith observability (default: false) |
+| `LANGSMITH_API_KEY` | No | LangSmith API key for tracing |
+| `LANGSMITH_PROJECT` | No | LangSmith project name (default: technical-support) |
 
 ### Agent Configuration
 
 Each agent can use different Gemini models:
-- `gemini-2.0-flash-exp` - Fast, efficient (recommended)
+- `gemini-2.5-flash-lite` - Fast, efficient (recommended, default)
+- `gemini-2.0-flash-exp` - Experimental features
 - `gemini-pro` - Balanced performance
 - `gemini-1.5-pro` - Most capable
+
+## Observability
+
+### LangSmith Integration
+
+LangSmith provides distributed tracing and monitoring for agent interactions:
+
+- ✅ **Trace agent execution flow** (Orchestrator → Researcher → Reviewer)
+- ✅ **Monitor performance** (latency, errors, success rate)
+- ✅ **Track RAG vs. web search usage**
+- ✅ **Capture inputs/outputs** for debugging
+- ✅ **Analyze answer quality** over time
+
+**Setup:** See [LANGSMITH_SETUP.md](./LANGSMITH_SETUP.md) for complete configuration guide.
+
+**Quick enable:**
+```bash
+gcloud run services update technical-support-backend \
+  --region us-central1 \
+  --set-env-vars "LANGSMITH_TRACING=true,LANGSMITH_PROJECT=technical-support" \
+  --update-secrets "LANGSMITH_API_KEY=langsmith-api-key:latest"
+```
 
 ## Monitoring
 

@@ -7,6 +7,7 @@ from google import genai
 from google.genai import types
 import os
 import asyncio
+from utils.tracing import trace_agent
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class OrchestratorAgent:
         
         logger.info(f"Orchestrator initialized with model: {self.model_id}")
     
+    @trace_agent(agent_name="orchestrator", run_type="chain")
     async def process_query(
         self,
         question: str,

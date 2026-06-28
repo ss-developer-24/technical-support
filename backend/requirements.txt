@@ -28,3 +28,4 @@ requests==2.31.0
 
 # Logging and monitoring
 python-json-logger==2.0.7
+langsmith==0.1.0
