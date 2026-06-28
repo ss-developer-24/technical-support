@@ -17,6 +17,7 @@ load_dotenv()
 from agents.orchestrator import OrchestratorAgent
 from agents.researcher import ResearcherAgent
 from agents.reviewer import ReviewerAgent
+from utils.tracing import log_interaction, get_langsmith_info
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -52,10 +53,11 @@ class QuestionResponse(BaseModel):
 orchestrator_agent = None
 researcher_agent = None
 reviewer_agent = None
+ingestion_completed = False
 
 def initialize_agents():
     """Initialize all agents on first request"""
-    global orchestrator_agent, researcher_agent, reviewer_agent
+    global orchestrator_agent, researcher_agent, reviewer_agent, ingestion_completed
     
     if orchestrator_agent is None:
         logger.info("Initializing agents...")
@@ -74,6 +76,21 @@ def initialize_agents():
             )
             
             logger.info("All agents initialized successfully")
+            
+            # Auto-ingest documents if collection is empty (only once)
+            if not ingestion_completed:
+                doc_count = researcher_agent.rag_engine.collection.count()
+                logger.info(f"ChromaDB collection has {doc_count} documents")
+                
+                if doc_count == 0:
+                    logger.info("Collection is empty - starting auto-ingestion in background")
+                    thread = threading.Thread(target=run_ingestion_in_thread, daemon=True)
+                    thread.start()
+                    ingestion_completed = True
+                else:
+                    logger.info("Collection already has documents - skipping auto-ingestion")
+                    ingestion_completed = True
+                    
         except Exception as e:
             logger.error(f"Failed to initialize agents: {str(e)}")
             raise
@@ -108,11 +125,24 @@ async def answer_question(request: QuestionRequest):
             session_id=request.session_id
         )
         
-        return QuestionResponse(
+        response = QuestionResponse(
             answer=result["answer"],
             sources=result.get("sources", []),
             session_id=result.get("session_id")
         )
+        
+        # Log interaction to LangSmith for observability
+        log_interaction(
+            question=request.question,
+            answer=result["answer"],
+            sources=result.get("sources", []),
+            metadata={
+                "session_id": request.session_id,
+                "source_count": len(result.get("sources", []))
+            }
+        )
+        
+        return response
         
     except Exception as e:
         logger.error(f"Error processing question: {str(e)}")
@@ -142,7 +172,8 @@ async def get_status():
             "gcp_project": os.getenv("GCP_PROJECT_ID"),
             "vertex_ai_location": os.getenv("VERTEX_AI_LOCATION", "us-central1"),
             "storage_bucket": os.getenv("GCS_BUCKET_NAME")
-        }
+        },
+        "observability": get_langsmith_info()
     }
 
 @app.post("/api/ingest")

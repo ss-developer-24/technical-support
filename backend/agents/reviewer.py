@@ -8,6 +8,7 @@ from google.genai import types
 import os
 import json
 import asyncio
+from utils.tracing import trace_agent
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class ReviewerAgent:
         
         logger.info(f"Reviewer initialized with model: {self.model_id}")
     
+    @trace_agent(agent_name="reviewer", run_type="chain")
     async def review(
         self,
         question: str,
